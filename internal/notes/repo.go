@@ -3,6 +3,7 @@ package notes
 import (
 	"context"
 	"errors"
+	"math"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -51,12 +52,21 @@ func (r *Repo) ByID(ctx context.Context, idHex string) (Note, error) {
 	}
 	return n, nil
 }
-func (r *Repo) List(ctx context.Context, q string, limit, skip int64) ([]Note, error) {
+func (r *Repo) List(ctx context.Context, q string, limit int64, after string) ([]Note, error) {
 	filter := bson.M{}
 	if q != "" {
 		filter["title"] = bson.M{"$regex": q, "$options": "i"}
 	}
-	opts := options.Find().SetLimit(limit).SetSkip(skip).SetSort(bson.D{{Key: "createdAt", Value: -1}})
+
+	if after != "" {
+		afterID, err := primitive.ObjectIDFromHex(after)
+		if err != nil {
+			return nil, err
+		}
+		filter["_id"] = bson.M{"$lt": afterID}
+	}
+
+	opts := options.Find().SetLimit(limit).SetSort(bson.D{{Key: "_id", Value: -1}})
 	cur, err := r.col.Find(ctx, filter, opts)
 	if err != nil {
 		return nil, err
@@ -107,4 +117,41 @@ func (r *Repo) Delete(ctx context.Context, idHex string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (r *Repo) Stats(ctx context.Context) (map[string]interface{}, error) {
+	pipeline := mongo.Pipeline{
+		// Группируем все документы
+		{{Key: "$group", Value: bson.M{
+			"_id":              nil,
+			"totalNotes":       bson.M{"$sum": 1},
+			"avgContentLength": bson.M{"$avg": bson.M{"$strLenCP": "$content"}},
+		}}},
+	}
+
+	cur, err := r.col.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+
+	var results []bson.M
+	if err = cur.All(ctx, &results); err != nil {
+		return nil, err
+	}
+
+	if len(results) == 0 {
+		return map[string]interface{}{
+			"totalNotes":       0,
+			"avgContentLength": 0,
+		}, nil
+	}
+
+	stats := results[0]
+	ratio := math.Pow(10, float64(2))
+	avgContend := math.Round(stats["avgContentLength"].(float64)*ratio) / ratio
+	return map[string]any{
+		"totalNotes":       stats["totalNotes"],
+		"avgContentLength": avgContend,
+	}, nil
 }

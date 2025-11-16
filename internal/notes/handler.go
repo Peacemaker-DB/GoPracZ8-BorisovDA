@@ -16,11 +16,13 @@ type Handler struct{ repo *Repo }
 func NewHandler(r *Repo) *Handler { return &Handler{repo: r} }
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
-	r.Get("/", h.list)
+	//r.Get("/", h.list)
+	r.Get("/cursor", h.listCursor)
 	r.Post("/", h.create)
 	r.Get("/{id}", h.get)
 	r.Patch("/{id}", h.patch)
 	r.Delete("/{id}", h.del)
+	r.Get("/stats", h.stats)
 	return r
 }
 func reqCtx(r *http.Request) (context.Context, context.CancelFunc) {
@@ -64,19 +66,17 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, n)
 }
-func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) listCursor(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	limit, _ := strconv.ParseInt(r.URL.Query().Get("limit"), 10, 64)
-	skip, _ := strconv.ParseInt(r.URL.Query().Get("skip"), 10, 64)
+	after := r.URL.Query().Get("after")
 	if limit <= 0 || limit > 200 {
 		limit = 20
 	}
-	if skip < 0 {
-		skip = 0
-	}
+
 	c, cancel := reqCtx(r)
 	defer cancel()
-	items, err := h.repo.List(c, q, limit, skip)
+	items, err := h.repo.List(c, q, limit, after)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -118,4 +118,17 @@ func (h *Handler) del(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(204)
+}
+
+func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
+	c, cancel := reqCtx(r)
+	defer cancel()
+
+	stats, err := h.repo.Stats(c)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, 200, stats)
 }
